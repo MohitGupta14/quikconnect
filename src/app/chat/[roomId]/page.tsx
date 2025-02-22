@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { ClientToServerEvents, ServerToClientEvents, Message } from '~/app/types/chat';
 import { useParams } from "next/navigation";
@@ -12,41 +12,67 @@ export default function ChatRoom() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [username, setUsername] = useState('');
   const { roomId } = useParams() as { roomId: string };
+  const socketRef = useRef<Socket<ServerToClientEvents, ClientToServerEvents>>();
 
+  // Handle username input
   useEffect(() => {
     if (!username) {
       const name = prompt('Enter your username:') || 'Anonymous';
       setUsername(name);
     }
+  }, [username]);
 
-    socket = io('http://localhost:8000');
-
+  // Socket connection and room management
+  useEffect(() => {
+    // Create socket connection with CORS credentials
+    socketRef.current = io('http://localhost:80', {
+      withCredentials: true,
+      transports: ['websocket'], // Ensure WebSocket transport to avoid polling issues
+    });
+  
+    const socket = socketRef.current;
+  
     if (roomId) {
+      setMessages([]); // Clear messages when changing rooms
       socket.emit('join-room', roomId);
       console.log(`Joined room: ${roomId}`);
     }
-
-    socket.on('previous-messages', (previousMessages: Message[]) => {
+  
+    // Handle previous messages
+    const handlePreviousMessages = (previousMessages: Message[]) => {
       console.log('Previous messages:', previousMessages);
       setMessages(previousMessages);
-    });
-
-
-    socket.on('receive-message', (data) => {
+    };
+  
+    // Handle incoming messages
+    const handleReceiveMessage = (data: Message) => {
       console.log('Received message:', data);
       setMessages(prev => [...prev, data]);
-    });
-
-    return () => {
-      socket.disconnect();
     };
-  }, [roomId, username]);
-
+  
+    // Register event listeners
+    socket.on('previous-messages', handlePreviousMessages);
+    socket.on('receive-message', handleReceiveMessage);
+  
+    // Error handling
+    socket.on('connect_error', (err) => {
+      console.error('Socket connection error:', err.message);
+    });
+  
+    // Cleanup function to prevent memory leaks
+    return () => {
+      socket.off('previous-messages', handlePreviousMessages);
+      socket.off('receive-message', handleReceiveMessage);
+      socket.disconnect();
+      console.log('Socket disconnected');
+    };
+  }, [roomId]);
+  
   const sendMessage = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!message.trim()) return;
+    if (!message.trim() || !socketRef.current) return;
 
-    socket.emit('send-message', {
+    socketRef.current.emit('send-message', {
       message,
       sender: username,
       roomId
